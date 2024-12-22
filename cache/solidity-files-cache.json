@@ -1340,8 +1340,8 @@
       "artifacts": []
     },
     "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\TokenPool.sol": {
-      "lastModificationDate": 1734870639877,
-      "contentHash": "e083ea7711c0f886aa07c1c88a2e2966",
+      "lastModificationDate": 1734876179638,
+      "contentHash": "e2e6c9f694ae8415a52f5d8d030a3449",
       "sourceName": "contracts/TokenPool.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -1496,8 +1496,8 @@
       ]
     },
     "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\CasinoFactory.sol": {
-      "lastModificationDate": 1734870627256,
-      "contentHash": "0f194d09ecfc4761eddd89120d33ac5d",
+      "lastModificationDate": 1734876233024,
+      "contentHash": "af2d8f5d40945b585f2ba2fec71ab2de",
       "sourceName": "contracts/CasinoFactory.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -5790,8 +5790,8 @@
       ]
     },
     "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\CasinoRouter.sol": {
-      "lastModificationDate": 1734870275761,
-      "contentHash": "2667ab50177452be9f680e601463d216",
+      "lastModificationDate": 1734874884772,
+      "contentHash": "47b6e05d1768886e7cb0e4e315f71259",
       "sourceName": "contracts/CasinoRouter.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -5818,8 +5818,9 @@
         }
       },
       "imports": [
-        "./token/ERC20/IERC20.sol",
+        "./interfaces/IERC20.sol",
         "./token/ERC20/utils/SafeERC20.sol",
+        "./interfaces/ICustomToken.sol",
         "./CasinoFactory.sol",
         "./TokenPool.sol"
       ],
@@ -6538,8 +6539,8 @@
       ]
     },
     "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\interfaces\\ICasinoFactory.sol": {
-      "lastModificationDate": 1734870234466,
-      "contentHash": "ea17f3a7befd29a78f6a690bda098a80",
+      "lastModificationDate": 1734874806208,
+      "contentHash": "9f09611d86f1c97839afc47af8dbdd4b",
       "sourceName": "contracts/interfaces/ICasinoFactory.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -6574,8 +6575,8 @@
       ]
     },
     "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\errors\\CasinoErrors.sol": {
-      "lastModificationDate": 1734870212855,
-      "contentHash": "0e08bf22338f0672a5ad0c8a94e79473",
+      "lastModificationDate": 1734874089934,
+      "contentHash": "563f77e1604b52edc20cee4d7b5ffd6a",
       "sourceName": "contracts/errors/CasinoErrors.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -6606,6 +6607,44 @@
         "^0.8.20"
       ],
       "artifacts": []
+    },
+    "C:\\Users\\macle\\Desktop\\tests\\contracts\\contracts\\interfaces\\ICustomToken.sol": {
+      "lastModificationDate": 1734872528133,
+      "contentHash": "aace41b356ab53a15ccd133852e0b580",
+      "sourceName": "contracts/interfaces/ICustomToken.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "cancun",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./IERC20.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "ICustomToken"
+      ]
     }
   }
 }

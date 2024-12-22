@@ -20,42 +20,111 @@ Individual pool contracts that manage token-specific operations including:
 - Liquidity provision
 - Fee collection and distribution
 - Emergency withdrawals
+- Firebase balance verification
 
 ### CasinoRouter
 A helper contract that provides convenient methods for users to interact with multiple pools, including:
 - Multi-pool deposits
-- Multi-pool withdrawals
+- Multi-pool withdrawals (with and without Firebase verification)
 - Pool balance checks
 - Active pool verification
 
 ## Key Features
 
+### Firebase Integration
+- Secure nonce-based balance verification system
+- Authorized operator balance updates
+- Balance expiry mechanism (24 hours)
+- Batch update support for efficiency
+- Double-spend protection through nonces
+
+Example withdrawal process:
+```javascript
+// 1. Update Firebase balance through operator
+await pool.updateFirebaseBalance(
+    userAddress,
+    balance,
+    nonce // Must be greater than current nonce
+);
+
+// 2. Withdraw (requires valid Firebase balance)
+await router.withdrawFromPool(
+    tokenAddress,
+    amount
+);
+
+// Optional: Batch update multiple balances
+await pool.batchUpdateFirebaseBalances([
+    { user: address1, balance: balance1, nonce: nonce1 },
+    { user: address2, balance: balance2, nonce: nonce2 }
+]);
+```
+
+Key Security Features:
+- Users can only withdraw up to their verified Firebase balance
+- Each balance update requires an incrementing nonce
+- Balance proofs expire after 24 hours
+- Only authorized operators can update balances
+- Efficient batch processing for multiple users
+
 ### Fee Management
-- Platform Fee: Default 5% (500 basis points), configurable up to 10%
-- Game Fee: Default 5% (500 basis points), configurable up to 10%
-- Fees are collected on deposits, withdrawals, and game winnings
-- Collected fees are distributed to liquidity providers
+- Liquidity Provider Operations:
+  - 2.5% fee for adding liquidity (goes to platform)
+  - 2.5% fee for removing liquidity (goes to platform)
+  - Example: 1000 USDC deposit costs 25 USDC platform fee
+
+- Game Operations:
+  - 2% of each bet goes to LP rewards
+  - 1% of each bet goes to platform
+  - Example: 100 USDC bet has:
+    * 2 USDC to LP rewards pool
+    * 1 USDC to platform
 
 ### Operator System
 - Operators can be added/removed by the factory owner
 - Each operator has an associated name for identification
-- Operators can process game results
+- Operators can process game results and sign withdrawals
 - Only authorized operators can interact with pools
 
 ### Liquidity Provision
-- Users can provide liquidity to pools
-- Liquidity providers earn fees from game operations
-- Share-based system for tracking liquidity provision
-- Rewards can be claimed at any time
+- Users can provide liquidity to pools (2.5% platform fee)
+- Share calculation based on current pool value:
+  * newShares = (deposit * totalShares) / totalDeposits
+  * Example: 200 USDC into 2970 USDC pool gets ~6% share
+- Liquidity providers earn 2% from each bet
+- Rewards system:
+  * Accumulated rewards tracked per share
+  * Platform takes 1% when rewards claimed
+  * Rewards distributed proportionally to shares
+  * Example: 1000 USDC in bets generates 20 USDC in LP rewards
 
 ### Security Features
+- Nonce-based Firebase balance verification
+- Incrementing nonce validation
+- Balance expiry after 24 hours
 - Pausable system for emergency situations
 - Emergency withdrawal functionality
 - Reentrancy protection
 - Role-based access control
 - Fee limits and validations
+- Batch operation support
 
 ## Test Coverage
+
+### Firebase Integration Tests
+1. Balance Verification
+   - Tests Firebase balance updates
+   - Verifies nonce increments
+   - Checks balance expiry
+   - Tests invalid nonce handling
+   - Validates batch updates
+
+2. Withdrawal Security
+   - Tests withdrawal limits
+   - Verifies balance proofs
+   - Checks nonce validation
+   - Tests double-spend prevention
+   - Validates batch processing
 
 ### Basic Integration Tests
 1. Pool Creation and Configuration
@@ -76,6 +145,7 @@ A helper contract that provides convenient methods for users to interact with mu
 
 4. Withdrawal System
    - Tests basic withdrawals
+   - Tests signed withdrawals
    - Verifies fee deductions
    - Confirms balance updates
 
@@ -145,8 +215,15 @@ A helper contract that provides convenient methods for users to interact with mu
 
 ### Access Control
 - Owner-only functions for critical operations
-- Operator system for game processing
+- Operator system for game processing and withdrawals
 - Factory-controlled pool management
+
+### Firebase Security
+- Balance verification through nonce system
+- Balance expiry mechanism
+- Double-spend protection through nonces
+- Batch update validation
+- Strict operator authorization
 
 ### Emergency Controls
 1. Pause Mechanism
@@ -162,13 +239,17 @@ A helper contract that provides convenient methods for users to interact with mu
    - Resets pool state
 
 ### Balance Protection
+- Firebase balance verification
+- Operator signature requirements
+- Balance expiry after 24 hours
 - Reentrancy guards on all value transfers
 - Balance checks before withdrawals
 - Fee limits to prevent excessive charges
 - Safe transfer implementations
 
 ## Test Results
-All 20 tests passing, covering:
+All tests passing, covering:
+- 4 Firebase Integration Tests
 - 4 Basic Integration Tests
 - 6 Factory Tests
 - 7 Pool Tests

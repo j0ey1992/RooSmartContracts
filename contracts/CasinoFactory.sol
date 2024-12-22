@@ -11,14 +11,18 @@ import "./errors/CasinoErrors.sol";
  * @dev Factory contract for deploying and managing token pools
  */
 contract CasinoFactory is Pausable, Ownable {
-    // Constants
-    uint256 public constant BASIS_POINTS = 10000;
-    uint256 public constant MAX_FEE = 1000; // 10% maximum fee
-    
     // State Variables
     address public platformWallet;
-    uint256 public platformFee; // e.g., 500 = 5%
-    uint256 public gameFee;     // e.g., 500 = 5%
+    address public router;
+    uint256 public poolCreationFee; // Optional fee for creating pools
+
+    /**
+     * @dev Set the router address
+     */
+    function setRouter(address _router) external onlyOwner {
+        if (_router == address(0)) revert InvalidWalletAddress();
+        router = _router;
+    }
     
     // Operators
     mapping(address => bool) public operators;
@@ -37,11 +41,7 @@ contract CasinoFactory is Pausable, Ownable {
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
     event GameFeeUpdated(uint256 oldFee, uint256 newFee);
 
-    constructor() Ownable(msg.sender) {
-        // Default fees
-        platformFee = 500; // 5%
-        gameFee = 500;     // 5%
-    }
+    constructor() Ownable(msg.sender) {}
 
     function initialize(address _platformWallet) external {
         if (_platformWallet == address(0)) revert InvalidWalletAddress();
@@ -81,26 +81,6 @@ contract CasinoFactory is Pausable, Ownable {
     }
 
     /**
-     * @dev Update platform fee
-     */
-    function setPlatformFee(uint256 newFee) external onlyOwner {
-        if (newFee > MAX_FEE) revert FeeTooHigh();
-        uint256 oldFee = platformFee;
-        platformFee = newFee;
-        emit PlatformFeeUpdated(oldFee, newFee);
-    }
-
-    /**
-     * @dev Update game fee
-     */
-    function setGameFee(uint256 newFee) external onlyOwner {
-        if (newFee > MAX_FEE) revert FeeTooHigh();
-        uint256 oldFee = gameFee;
-        gameFee = newFee;
-        emit GameFeeUpdated(oldFee, newFee);
-    }
-
-    /**
      * @dev Update platform wallet
      */
     function updatePlatformWallet(address newWallet) external onlyOwner {
@@ -110,49 +90,38 @@ contract CasinoFactory is Pausable, Ownable {
     }
 
     /**
-     * @dev Create a new pool for a token
+     * @dev Set pool creation fee
      */
-    function createPool(address token) external {
+    function setPoolCreationFee(uint256 newFee) external onlyOwner {
+        poolCreationFee = newFee;
+    }
+
+    /**
+     * @dev Create a new pool for a token
+     * Anyone can create a pool by paying the creation fee
+     * Factory maintains ownership and control
+     */
+    function createPool(address token) external payable {
         if (token == address(0)) revert InvalidWalletAddress();
         if (isPoolDeployed[token]) revert PoolAlreadyExists();
+        
+        // Check creation fee if set
+        if (poolCreationFee > 0) {
+            if (msg.value < poolCreationFee) revert InvalidAmount();
+            // Forward fee to platform wallet
+            (bool sent, ) = platformWallet.call{value: msg.value}("");
+            if (!sent) revert("Failed to send fee");
+        }
 
-        // Deploy new pool
+        // Deploy new pool (factory remains owner)
         TokenPool pool = new TokenPool(token, address(this), platformWallet);
         
-        // Set initial fee
-        pool.setPlatformFee(platformFee);
-
         // Record
         tokenToPools[token] = address(pool);
         isPoolDeployed[token] = true;
         deployedTokens.push(token);
 
         emit PoolCreated(token, address(pool));
-    }
-
-    /**
-     * @dev Update fee for an existing pool
-     */
-    function updatePoolFee(address token) external {
-        if (!operators[msg.sender] && msg.sender != owner()) revert NotAuthorized();
-        address poolAddress = tokenToPools[token];
-        if (poolAddress == address(0)) revert PoolDoesNotExist();
-        
-        TokenPool(poolAddress).setPlatformFee(platformFee);
-    }
-
-    /**
-     * @dev Update fees for all existing pools
-     */
-    function updateAllPoolFees() external {
-        if (!operators[msg.sender] && msg.sender != owner()) revert NotAuthorized();
-        
-        (, address[] memory pools) = getDeployedPools();
-        for (uint i = 0; i < pools.length; i++) {
-            if (pools[i] != address(0)) {
-                TokenPool(pools[i]).setPlatformFee(platformFee);
-            }
-        }
     }
 
     /**

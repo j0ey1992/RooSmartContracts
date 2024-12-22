@@ -16,33 +16,27 @@ import "./errors/CasinoErrors.sol";
 contract TokenPool is Pausable, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    /**
-     * @dev Pause the pool
-     */
-    function pause() external onlyOwner {
-        _pause();
-    }
-
-    /**
-     * @dev Unpause the pool
-     */
-    function unpause() external onlyOwner {
-        _unpause();
-    }
-
     // Constants
     uint256 private constant BASIS_POINTS = 10000;
     uint256 private constant MAX_FEE = 1000; // 10% max
+    uint256 private constant BALANCE_EXPIRY_BLOCKS = 5760; // ~24 hours at 15s/block
 
     // Fee settings
-    uint256 public platformFee; // default 5% = 500
-    uint256 public gameFee;     // default 5% = 500
+    uint256 public constant LP_FEE = 250;        // 2.5% fee for adding/removing liquidity
+    uint256 public constant GAME_LP_FEE = 200;   // 2% of each bet goes to LPs
+    uint256 public constant GAME_PLATFORM_FEE = 100; // 1% of each bet goes to platform
+    address public constant PLATFORM_WALLET = 0x1db597fE69BA45c0dd0E3DBE1919231e44B2d402;
 
     // Core state
     IERC20 public token;
     ICasinoFactory public factory;
     address public platformWallet;
     uint256 public totalDeposits;
+
+    // Firebase balance tracking
+    mapping(address => uint256) public firebaseBalances;
+    mapping(address => uint256) public lastBalanceUpdate;
+    mapping(address => uint256) public balanceNonces;
 
     // Liquidity
     uint256 public totalShares;
@@ -59,6 +53,7 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
     event LiquidityRemoved(address indexed provider, uint256 amount, uint256 shares, uint256 timestamp);
     event RewardsClaimed(address indexed provider, uint256 amount, uint256 timestamp);
     event GameResult(address indexed user, uint256 betAmount, uint256 winAmount, uint256 houseFee, uint256 timestamp);
+    event FirebaseBalanceUpdated(address indexed user, uint256 balance, uint256 blockNumber);
 
     constructor(
         address _token,
@@ -73,33 +68,122 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
         factory = ICasinoFactory(_factory);
         platformWallet = _platformWallet;
 
-        // Default fees
-        platformFee = 500; // 5%
-        gameFee = 500;     // 5%
+        // No default fees needed - using constants
 
         // Transfer ownership to factory
         transferOwnership(_factory);
     }
 
+    /**
+     * @dev Pause the pool
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @dev Unpause the pool
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
     // ------------------------------------
-    // Liquidity Management (Optional)
+    // Firebase Balance Management
+    // ------------------------------------
+    
+    // Struct for batch balance updates
+    struct BalanceUpdate {
+        address user;
+        uint256 balance;
+        uint256 nonce;
+    }
+
+    event BatchBalanceUpdate(address[] users, uint256[] balances, uint256[] nonces);
+
+    /**
+     * @dev Update a single user's Firebase balance
+     */
+    function updateFirebaseBalance(
+        address user,
+        uint256 balance,
+        uint256 nonce
+    ) external {
+        if (!factory.operators(msg.sender)) revert NotAuthorized();
+        if (nonce <= balanceNonces[user]) revert InvalidNonce();
+        
+        _updateBalance(user, balance, nonce);
+    }
+
+    /**
+     * @dev Batch update multiple users' Firebase balances
+     */
+    function batchUpdateFirebaseBalances(BalanceUpdate[] calldata updates) external {
+        if (!factory.operators(msg.sender)) revert NotAuthorized();
+        if (updates.length == 0) revert EmptyUpdates();
+        
+        address[] memory users = new address[](updates.length);
+        uint256[] memory balances = new uint256[](updates.length);
+        uint256[] memory nonces = new uint256[](updates.length);
+
+        for (uint256 i = 0; i < updates.length; i++) {
+            BalanceUpdate memory update = updates[i];
+            if (update.nonce <= balanceNonces[update.user]) revert InvalidNonce();
+            
+            _updateBalance(update.user, update.balance, update.nonce);
+            
+            users[i] = update.user;
+            balances[i] = update.balance;
+            nonces[i] = update.nonce;
+        }
+
+        emit BatchBalanceUpdate(users, balances, nonces);
+    }
+
+    /**
+     * @dev Internal function to update a user's balance
+     */
+    function _updateBalance(address user, uint256 balance, uint256 nonce) internal {
+        firebaseBalances[user] = balance;
+        lastBalanceUpdate[user] = block.number;
+        balanceNonces[user] = nonce;
+        
+        emit FirebaseBalanceUpdated(user, balance, block.number);
+    }
+
+    // ------------------------------------
+    // Liquidity Management
     // ------------------------------------
     function addLiquidity(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert InvalidAmount();
 
+        // Calculate platform fee (2.5%)
+        uint256 platformFeeAmount = (amount * LP_FEE) / BASIS_POINTS;
+        uint256 netAmount = amount - platformFeeAmount;
+
         uint256 newShares;
         if (totalShares == 0) {
-            newShares = amount;
+            newShares = netAmount;
         } else {
-            newShares = (amount * totalShares) / totalDeposits;
+            // Calculate shares based on net amount
+            newShares = (netAmount * totalShares) / totalDeposits;
         }
 
-        rewardDebt[msg.sender] = (newShares * accRewardPerShare) / 1e12;
+        // Transfer tokens
         token.safeTransferFrom(msg.sender, address(this), amount);
-
-        totalDeposits += amount;
+        
+        // Send platform fee
+        if (platformFeeAmount > 0) {
+            token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
+        }
+        
+        // Update state with net amount
+        totalDeposits += netAmount;
         totalShares += newShares;
         shares[msg.sender] += newShares;
+        
+        // Initialize reward debt based on current accumulated rewards
+        rewardDebt[msg.sender] = (newShares * accRewardPerShare) / 1e12;
 
         emit LiquidityAdded(msg.sender, amount, newShares, block.timestamp);
     }
@@ -108,16 +192,29 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
         if (shareAmount == 0) revert InvalidAmount();
         if (shareAmount > shares[msg.sender]) revert InsufficientShares();
 
+        // Claim any pending rewards first
         _harvestRewards(msg.sender);
 
+        // Calculate token amount based on shares
         uint256 tokenAmount = (shareAmount * totalDeposits) / totalShares;
+
+        // Calculate platform fee (2.5%)
+        uint256 platformFeeAmount = (tokenAmount * LP_FEE) / BASIS_POINTS;
+        uint256 netAmount = tokenAmount - platformFeeAmount;
+
+        // Update state
         totalDeposits -= tokenAmount;
         totalShares -= shareAmount;
         shares[msg.sender] -= shareAmount;
-
         rewardDebt[msg.sender] = (shares[msg.sender] * accRewardPerShare) / 1e12;
 
-        token.safeTransfer(msg.sender, tokenAmount);
+        // Send platform fee
+        if (platformFeeAmount > 0) {
+            token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
+        }
+
+        // Send net amount to user
+        token.safeTransfer(msg.sender, netAmount);
 
         emit LiquidityRemoved(msg.sender, tokenAmount, shareAmount, block.timestamp);
     }
@@ -132,11 +229,23 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
 
         uint256 pending = (userTotal * accRewardPerShare) / 1e12 - rewardDebt[provider];
         if (pending > 0) {
+            // Calculate platform's 1% of rewards
+            uint256 platformFeeAmount = (pending * GAME_PLATFORM_FEE) / BASIS_POINTS;
+            uint256 netRewards = pending - platformFeeAmount;
+
+            // Update state
             accumulatedFees -= pending;
-            token.safeTransfer(provider, pending);
-            emit RewardsClaimed(provider, pending, block.timestamp);
+            rewardDebt[provider] = (userTotal * accRewardPerShare) / 1e12;
+
+            // Send platform fee
+            if (platformFeeAmount > 0) {
+                token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
+            }
+
+            // Send net rewards to provider
+            token.safeTransfer(provider, netRewards);
+            emit RewardsClaimed(provider, netRewards, block.timestamp);
         }
-        rewardDebt[provider] = (userTotal * accRewardPerShare) / 1e12;
     }
 
     // ------------------------------------
@@ -147,45 +256,61 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
         uint256 betAmount,
         uint256 winAmount
     ) external {
-        // Must be from an operator or the owner
-        // Fix bracket mismatch: ( ) not ]
         if (!factory.operators(msg.sender) && msg.sender != factory.owner()) {
             revert NotAuthorized();
         }
 
-        if (winAmount > 0) {
-            // house fee on winnings
-            uint256 houseFee = (winAmount * gameFee) / BASIS_POINTS;
-            uint256 netWin = winAmount - houseFee;
+        // Verify and update Firebase balance for bet
+        if (betAmount > firebaseBalances[user]) revert InsufficientBalance();
+        firebaseBalances[user] -= betAmount;
+        balanceNonces[user] = balanceNonces[user] + 1;
 
-            // distribute fee as reward
-            accumulatedFees += houseFee;
+        if (winAmount > 0) {
+            // Calculate fees on winnings (2% LP + 1% platform)
+            uint256 totalFee = (winAmount * (GAME_LP_FEE + GAME_PLATFORM_FEE)) / BASIS_POINTS;
+            uint256 platformFeeAmount = (winAmount * GAME_PLATFORM_FEE) / BASIS_POINTS;
+            uint256 lpFee = (winAmount * GAME_LP_FEE) / BASIS_POINTS;
+            uint256 netWin = winAmount - totalFee;
+
+            // Update rewards for LPs
+            accumulatedFees += lpFee;
             if (totalShares > 0) {
-                accRewardPerShare += (houseFee * 1e12) / totalShares;
+                accRewardPerShare += (lpFee * 1e12) / totalShares;
             }
 
             if (netWin > totalDeposits) revert InsufficientBalance();
+            
+            // Add net winnings to Firebase balance
+            firebaseBalances[user] += netWin;
+            
+            // Transfer winnings and fees
             token.safeTransfer(user, netWin);
+            token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
+            totalDeposits = totalDeposits - winAmount + lpFee;
 
-            // pool effectively loses (winAmount - houseFee)
-            totalDeposits = totalDeposits - winAmount + houseFee;
-
-            emit GameResult(user, betAmount, winAmount, houseFee, block.timestamp);
+            emit GameResult(user, betAmount, winAmount, lpFee, block.timestamp);
         } else {
-            // user lost => bet is gained by the pool
-            totalDeposits += betAmount;
-            emit GameResult(user, betAmount, 0, betAmount, block.timestamp);
-        }
-    }
+            // On loss, calculate fees (2% LP + 1% platform)
+            uint256 platformFeeAmount = (betAmount * GAME_PLATFORM_FEE) / BASIS_POINTS;
+            uint256 lpFee = (betAmount * GAME_LP_FEE) / BASIS_POINTS;
+            uint256 poolAmount = betAmount - platformFeeAmount - lpFee;
+            
+            // Update rewards for LPs
+            accumulatedFees += lpFee;
+            if (totalShares > 0) {
+                accRewardPerShare += (lpFee * 1e12) / totalShares;
+            }
 
-    // ------------------------------------
-    // Platform Fee
-    // ------------------------------------
-    function setPlatformFee(uint256 newFee) external onlyOwner {
-        if (newFee > MAX_FEE) revert FeeTooHigh();
-        uint256 oldFee = platformFee;
-        platformFee = newFee;
-        emit PlatformFeeUpdated(oldFee, newFee);
+            // Update pool balance and send platform fee
+            totalDeposits += poolAmount;
+            token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
+
+            emit GameResult(user, betAmount, 0, lpFee, block.timestamp);
+        }
+
+        // Update last balance update time and emit event
+        lastBalanceUpdate[user] = block.number;
+        emit FirebaseBalanceUpdated(user, firebaseBalances[user], block.number);
     }
 
     // ------------------------------------
@@ -194,29 +319,59 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
     function deposit(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert InvalidAmount();
 
-        uint256 feeAmount = (amount * platformFee) / BASIS_POINTS;
-        uint256 netAmount = amount - feeAmount;
-
+        // Transfer tokens from sender
         token.safeTransferFrom(msg.sender, address(this), amount);
-        if (feeAmount > 0) {
-            token.safeTransfer(platformWallet, feeAmount);
-        }
-        totalDeposits += netAmount;
+        
+        // Update balances
+        totalDeposits += amount;
+        firebaseBalances[msg.sender] += amount;
+        lastBalanceUpdate[msg.sender] = block.number;
+        balanceNonces[msg.sender] = balanceNonces[msg.sender] + 1;
 
-        emit Deposit(msg.sender, amount, netAmount, block.timestamp);
+        emit Deposit(msg.sender, amount, amount, block.timestamp);
+        emit FirebaseBalanceUpdated(msg.sender, firebaseBalances[msg.sender], block.number);
     }
 
+    function depositFor(address user, uint256 amount) external nonReentrant whenNotPaused {
+        // Only router can deposit for other users
+        if (msg.sender != factory.router()) revert NotAuthorized();
+
+        if (amount == 0) revert InvalidAmount();
+
+        // Update balances
+        totalDeposits += amount;
+        firebaseBalances[user] += amount;
+        lastBalanceUpdate[user] = block.number;
+        balanceNonces[user] = balanceNonces[user] + 1;
+
+        emit Deposit(user, amount, amount, block.timestamp);
+        emit FirebaseBalanceUpdated(user, firebaseBalances[user], block.number);
+    }
+
+    /**
+     * @dev Withdraw with Firebase balance verification
+     */
     function withdraw(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert InvalidAmount();
+
+        // Verify Firebase balance first
+        if (amount > firebaseBalances[msg.sender]) revert ExceedsFirebaseBalance();
+        if (block.number - lastBalanceUpdate[msg.sender] > BALANCE_EXPIRY_BLOCKS) revert BalanceProofExpired();
+
+        // Then check pool balance
         if (amount > totalDeposits) revert InsufficientBalance();
 
-        uint256 feeAmount = (amount * platformFee) / BASIS_POINTS;
-        uint256 netAmount = amount - feeAmount;
+        // Calculate platform fee (2.5%)
+        uint256 platformFeeAmount = (amount * LP_FEE) / BASIS_POINTS;
+        uint256 netAmount = amount - platformFeeAmount;
 
+        // Update balances
+        firebaseBalances[msg.sender] -= amount;
         totalDeposits -= amount;
 
-        if (feeAmount > 0) {
-            token.safeTransfer(platformWallet, feeAmount);
+        // Send platform fee and net amount
+        if (platformFeeAmount > 0) {
+            token.safeTransfer(PLATFORM_WALLET, platformFeeAmount);
         }
         token.safeTransfer(msg.sender, netAmount);
 
@@ -249,4 +404,5 @@ contract TokenPool is Pausable, Ownable, ReentrancyGuard {
         accumulatedFees = 0;
         accRewardPerShare = 0;
     }
+
 }

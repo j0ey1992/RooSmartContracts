@@ -10,3 +10,7 @@ error InvalidAmount();
 error PoolAlreadyExists();
 error PoolDoesNotExist();
 error InvalidWalletAddress();
+error ExceedsFirebaseBalance();
+error BalanceProofExpired();
+error InvalidNonce();
+error EmptyUpdates();

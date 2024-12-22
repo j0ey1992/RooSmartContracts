@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "./token/ERC20/IERC20.sol";
+import {IERC20} from "./interfaces/IERC20.sol";
 import {SafeERC20} from "./token/ERC20/utils/SafeERC20.sol";
+import {ICustomToken} from "./interfaces/ICustomToken.sol";
 import "./CasinoFactory.sol";
 import "./TokenPool.sol";
 
@@ -11,9 +12,11 @@ import "./TokenPool.sol";
  * @dev Provides a simplified interface for interacting with multiple token pools
  */
 contract CasinoRouter {
-    using SafeERC20 for IERC20;
+    using SafeERC20 for ICustomToken;
 
     CasinoFactory public immutable factory;
+    error InvalidWalletAddress();
+    error PoolDoesNotExist();
 
     constructor(address _factory) {
         if (_factory == address(0)) revert InvalidWalletAddress();
@@ -30,17 +33,17 @@ contract CasinoRouter {
         if (!exists || poolAddress == address(0)) revert PoolDoesNotExist();
         if (amount == 0) revert InvalidWalletAddress();
 
-        IERC20 tokenContract = IERC20(token);
-        // Transfer to this router, then approve pool
-        tokenContract.safeTransferFrom(msg.sender, address(this), amount);
-        tokenContract.forceApprove(poolAddress, amount);
+        ICustomToken tokenContract = ICustomToken(token);
+        
+        // Transfer tokens directly from user to pool
+        tokenContract.safeTransferFrom(msg.sender, poolAddress, amount);
 
-        // Deposit to the pool
-        TokenPool(poolAddress).deposit(amount);
+        // Call depositFor to update Firebase balance
+        TokenPool(poolAddress).depositFor(msg.sender, amount);
     }
 
     /**
-     * @dev Withdraw tokens from a specific pool with an operator signature
+     * @dev Withdraw tokens from a specific pool (requires Firebase balance verification)
      */
     function withdrawFromPool(
         address token,
